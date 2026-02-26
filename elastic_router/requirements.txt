@@ -1,0 +1,18 @@
+# GreenWeave — Elastic Router dependencies
+
+# Web framework
+fastapi==0.111.0
+uvicorn[standard]==0.30.1
+
+# Request validation
+pydantic==2.7.1
+
+# Redis client (same version as grid_monitor for consistency)
+redis==5.0.4
+
+# LLM providers
+openai==1.35.3          # also used for Groq (OpenAI-compatible)
+anthropic==0.29.0       # only needed if routing to Claude
+
+# Environment variables
+python-dotenv==1.0.1

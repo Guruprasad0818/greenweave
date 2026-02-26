@@ -1,0 +1,66 @@
+
+
+services:
+
+  # ── Redis ────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: greenweave_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Module 1: Grid Monitor ───────────────────────────────────────
+  grid_monitor:
+    build:
+      context: ./grid_monitor
+      dockerfile: Dockerfile
+    container_name: greenweave_grid_monitor
+    env_file: .env
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Module 2: Elastic Router ─────────────────────────────────────
+  elastic_router:
+    build:
+      context: ./elastic_router
+      dockerfile: Dockerfile
+    container_name: greenweave_elastic_router
+    env_file: .env
+    environment:
+      - REDIS_HOST=redis
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Module 4: Dashboard ──────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: greenweave_dashboard
+    environment:
+      - ROUTER_URL=http://elastic_router:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      elastic_router:
+        condition: service_healthy
+    restart: unless-stopped
