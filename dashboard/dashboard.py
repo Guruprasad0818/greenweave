@@ -1,6 +1,7 @@
 """
 GreenWeave — Module 4: Dashboard
-Judge-impressive Streamlit UI with live carbon meter, chat, CO₂ receipt, and Carbon Budget Mode.
+Climate AI Control Center — Carbon Budget + Predictive Carbon +
+Follow-the-Sun Multi-Region + Self-Learning Engine panels.
 """
 
 import time
@@ -27,6 +28,7 @@ st.markdown("""
     --yellow:     #f5c542;
     --red:        #ff4d4d;
     --orange:     #ff8c00;
+    --blue:       #4da6ff;
     --bg:         #080f0a;
     --surface:    #0e1a10;
     --surface2:   #142018;
@@ -54,10 +56,13 @@ h1, h2, h3 { font-family: var(--mono) !important; color: var(--green) !important
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 20px 24px;
+    padding: 16px 20px;
     margin-bottom: 14px;
     position: relative;
     overflow: hidden;
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--text-dim);
 }
 .gw-card::before {
     content: '';
@@ -66,6 +71,9 @@ h1, h2, h3 { font-family: var(--mono) !important; color: var(--green) !important
     height: 2px;
     background: linear-gradient(90deg, var(--green), transparent);
 }
+.gw-card.yellow::before { background: linear-gradient(90deg, #f5c542, transparent); }
+.gw-card.blue::before   { background: linear-gradient(90deg, #4da6ff, transparent); }
+.gw-card.orange::before { background: linear-gradient(90deg, #ff8c00, transparent); }
 
 .status-badge {
     display: inline-flex;
@@ -168,7 +176,6 @@ h1, h2, h3 { font-family: var(--mono) !important; color: var(--green) !important
 .stat-value { font-family: var(--mono); font-size: 26px; font-weight: 700; color: var(--green); line-height: 1; }
 .stat-label { font-family: var(--sans); font-size: 12px; color: var(--text-dim); margin-top: 6px; }
 
-/* Budget meter */
 .budget-card {
     background: var(--surface);
     border: 1px solid var(--border);
@@ -185,6 +192,17 @@ h1, h2, h3 { font-family: var(--mono) !important; color: var(--green) !important
     height: 2px;
     background: linear-gradient(90deg, #f5c542, transparent);
 }
+
+.region-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+}
+.region-row:last-child { border-bottom: none; }
 
 [data-testid="stTextInput"] input {
     background: var(--surface2) !important;
@@ -270,6 +288,13 @@ def get_budget():
     except:
         return {"budget_set": False}
 
+def get_engine_status():
+    try:
+        r = requests.get(f"{ROUTER_URL}/engine/status", timeout=2)
+        return r.json()
+    except:
+        return {}
+
 def set_budget(limit_g: float):
     requests.post(f"{ROUTER_URL}/budget/set", json={"limit_g": limit_g}, timeout=2)
 
@@ -287,6 +312,12 @@ def status_color(status):
 
 def status_emoji(status):
     return {"LOW": "🟢", "MODERATE": "🟡", "HIGH": "🔴"}.get(status, "⚪")
+
+def trend_color(t):
+    return {"IMPROVING": "#00ff88", "STABLE": "#f5c542", "WORSENING": "#ff4d4d"}.get(t, "#6b8f72")
+
+def trend_arrow(t):
+    return {"IMPROVING": "↓", "STABLE": "→", "WORSENING": "↑"}.get(t, "–")
 
 def budget_color(pct):
     if pct >= 100: return "#ff4d4d"
@@ -309,15 +340,14 @@ def pressure_label(pressure):
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown('<div style="font-family:Space Mono,monospace;font-size:22px;font-weight:700;color:#00ff88;">🌿 GreenWeave</div>', unsafe_allow_html=True)
-    st.markdown('<div style="font-family:DM Sans,sans-serif;font-size:13px;color:#6b8f72;">Climate-Intelligent AI Infrastructure</div>', unsafe_allow_html=True)
+    st.markdown('<div style="font-family:DM Sans,sans-serif;font-size:13px;color:#6b8f72;">Climate AI Control Center</div>', unsafe_allow_html=True)
     st.markdown('<hr class="gw-divider">', unsafe_allow_html=True)
 
-    # Live carbon status
+    # ── Live Grid Status ──────────────────────────────────────────
     carbon = get_carbon_status()
     status = carbon.get("status", "UNKNOWN")
     intensity = carbon.get("carbon_intensity", 0)
     region = carbon.get("region", "Unknown")
-
     fill_pct = min(100.0, (intensity / 800) * 100)
 
     st.markdown(f"""
@@ -340,6 +370,73 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # ── Intelligent Engine Panel ──────────────────────────────────
+    engine = get_engine_status()
+    if engine:
+        best_region = engine.get("best_region", "-")
+        delay       = engine.get("delay_execution", False)
+        adaptive    = engine.get("adaptive_threshold", 0)
+        confidence  = engine.get("learning_confidence", 0)
+        trend       = engine.get("trend", "STABLE")
+        predicted   = engine.get("predicted_next_hour_intensity", intensity)
+        regions     = engine.get("regions", {})
+        delay_color = "#ff8c00" if delay else "#00ff88"
+        delay_text  = "⏳ WAITING FOR CLEAN GRID" if delay else "⚡ EXECUTING NOW"
+
+        st.markdown(f"""
+        <div class="gw-card blue">
+            <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-dim);margin-bottom:12px;">🌍 INTELLIGENT ENGINE</div>
+            <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);">
+                <span>Carbon Trend</span>
+                <span style="color:{trend_color(trend)};font-family:var(--mono);">{trend_arrow(trend)} {trend}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);">
+                <span>Predicted Next Hour</span>
+                <span style="color:#4da6ff;font-family:var(--mono);">{predicted} gCO₂</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);">
+                <span>Best Region</span>
+                <span style="color:#00ff88;font-family:var(--mono);">🌱 {best_region}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);">
+                <span>Delay Execution</span>
+                <span style="color:{delay_color};font-family:var(--mono);font-size:10px;">{delay_text}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:5px 0;">
+                <span>Adaptive Threshold</span>
+                <span style="color:#00ff88;font-family:var(--mono);">{adaptive}</span>
+            </div>
+            <div style="margin-top:12px;">
+                <div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-bottom:6px;">SELF-LEARNING CONFIDENCE</div>
+                <div class="meter-track">
+                    <div class="meter-fill" style="width:{confidence*100:.0f}%;background:linear-gradient(90deg,#003d22,#00ff88);"></div>
+                </div>
+                <div style="text-align:right;font-size:11px;color:#00ff88;margin-top:4px;">{confidence*100:.0f}%</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ── Multi-Region Comparison ───────────────────────────────
+        if regions:
+            st.markdown("""
+            <div class="gw-card orange">
+                <div style="font-family:var(--mono);font-size:10px;letter-spacing:2px;color:var(--text-dim);margin-bottom:8px;">🌎 MULTI-REGION COMPARISON</div>
+            </div>
+            """, unsafe_allow_html=True)
+            for r_name, r_data in regions.items():
+                r_int   = r_data.get("intensity", 0)
+                r_trend = r_data.get("trend", "STABLE")
+                is_best = "⭐ " if r_name == best_region else ""
+                name_color = "#00ff88" if r_name == best_region else "var(--text)"
+                st.markdown(f"""
+                <div style="display:flex;justify-content:space-between;align-items:center;
+                    padding:6px 0;border-bottom:1px solid #1e3024;font-family:'Space Mono',monospace;font-size:11px;">
+                    <span style="color:{name_color};">{is_best}{r_name}</span>
+                    <span style="color:#c8e6d0;">{r_int} gCO₂</span>
+                    <span style="color:{trend_color(r_trend)};">{trend_arrow(r_trend)} {r_trend}</span>
+                </div>
+                """, unsafe_allow_html=True)
+
     # ── Carbon Budget Mode ────────────────────────────────────────
     st.markdown('<div style="font-family:Space Mono,monospace;font-size:10px;letter-spacing:2px;color:#f5c542;margin-bottom:10px;">⚡ CARBON BUDGET MODE</div>', unsafe_allow_html=True)
 
@@ -347,12 +444,12 @@ with st.sidebar:
     budget_set = budget.get("budget_set", False)
 
     if budget_set:
-        limit = budget.get("limit_g", 0)
-        used = budget.get("used_g", 0)
+        limit     = budget.get("limit_g", 0)
+        used      = budget.get("used_g", 0)
         remaining = budget.get("remaining_g", 0)
-        pct = budget.get("pct_used", 0)
-        pressure = budget.get("pressure", "NONE")
-        b_color = budget_color(pct)
+        pct       = budget.get("pct_used", 0)
+        pressure  = budget.get("pressure", "NONE")
+        b_color   = budget_color(pct)
 
         st.markdown(f"""
         <div class="budget-card">
@@ -383,17 +480,13 @@ with st.sidebar:
             reset_budget()
             st.rerun()
         if st.button("✕ Remove Budget", use_container_width=True):
-            requests.delete(f"{ROUTER_URL}/budget", timeout=2) if False else None
             reset_budget()
             st.rerun()
     else:
         st.markdown('<div style="font-family:DM Sans,sans-serif;font-size:12px;color:#6b8f72;margin-bottom:10px;">Set a monthly CO₂ limit. GreenWeave will automatically route to smaller models as you approach the limit.</div>', unsafe_allow_html=True)
         budget_limit = st.number_input(
             "Budget (grams CO₂)",
-            min_value=100.0,
-            max_value=100000.0,
-            value=2000.0,
-            step=100.0,
+            min_value=100.0, max_value=100000.0, value=2000.0, step=100.0,
             label_visibility="collapsed",
         )
         if st.button("🎯 Set Budget", type="primary", use_container_width=True):
@@ -403,7 +496,7 @@ with st.sidebar:
 
     st.markdown('<hr class="gw-divider">', unsafe_allow_html=True)
 
-    # Session stats
+    # ── Session Impact ────────────────────────────────────────────
     avg_energy = (
         sum(st.session_state.total_energy_saved_pct) / len(st.session_state.total_energy_saved_pct)
         if st.session_state.total_energy_saved_pct else 0
@@ -430,16 +523,17 @@ with st.sidebar:
 
     st.markdown('<hr class="gw-divider">', unsafe_allow_html=True)
 
-    # Settings
+    # ── Routing Settings ──────────────────────────────────────────
     st.markdown('<div style="font-family:Space Mono,monospace;font-size:10px;letter-spacing:2px;color:#6b8f72;margin-bottom:10px;">ROUTING SETTINGS</div>', unsafe_allow_html=True)
-    task_type = st.selectbox("Task Type", ["casual_chat", "summarization", "coding", "legal_drafting", "medical"])
+    task_type      = st.selectbox("Task Type", ["casual_chat", "summarization", "coding", "legal_drafting", "medical"])
     weight_profile = st.selectbox("Weight Profile", ["BALANCED", "ECO_FIRST", "ACCURACY_FIRST"])
 
     st.markdown('<hr class="gw-divider">', unsafe_allow_html=True)
 
-    health = get_health()
+    health    = get_health()
     router_ok = health.get("status") != "offline"
-    redis_ok = "connected" in str(health.get("redis", ""))
+    redis_ok  = "connected" in str(health.get("redis", ""))
+    engine_ok = bool(engine)
 
     st.markdown(f"""
     <div style="font-family:Space Mono,monospace;font-size:11px;">
@@ -450,6 +544,10 @@ with st.sidebar:
         <div style="display:flex;justify-content:space-between;padding:4px 0;color:#6b8f72;">
             <span>REDIS</span>
             <span style="color:{'#00ff88' if redis_ok else '#f5c542'}">{'● CONNECTED' if redis_ok else '● FALLBACK'}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:4px 0;color:#6b8f72;">
+            <span>ENGINE</span>
+            <span style="color:{'#00ff88' if engine_ok else '#ff4d4d'}">{'● ACTIVE' if engine_ok else '● OFFLINE'}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -471,21 +569,22 @@ st.markdown("""
 <div style="display:flex;align-items:center;gap:14px;margin-bottom:6px;">
     <div>
         <div style="font-family:'Space Mono',monospace;font-size:28px;font-weight:700;color:#00ff88;line-height:1;">🌿 GreenWeave</div>
-        <div style="font-family:'DM Sans',sans-serif;font-size:14px;color:#6b8f72;margin-top:4px;">Climate-Intelligent AI Inference &nbsp;·&nbsp; Carbon Budget Mode Active</div>
+        <div style="font-family:'DM Sans',sans-serif;font-size:14px;color:#6b8f72;margin-top:4px;">
+            Climate AI Control Center &nbsp;·&nbsp; Predictive · Multi-Region · Self-Learning
+        </div>
     </div>
 </div>
 <hr class="gw-divider">
 """, unsafe_allow_html=True)
 
-# Chat history
 if not st.session_state.messages:
     st.markdown("""
     <div style="text-align:center;padding:60px 20px;color:#6b8f72;">
         <div style="font-size:48px;margin-bottom:16px;">🌿</div>
         <div style="font-family:Space Mono,monospace;font-size:14px;color:#00ff88;margin-bottom:8px;">GREENWEAVE READY</div>
-        <div style="font-family:DM Sans,sans-serif;font-size:13px;max-width:400px;margin:0 auto;line-height:1.6;">
-            Every response is routed to the most climate-appropriate model.<br>
-            Set a Carbon Budget in the sidebar to enable automatic downgrading.
+        <div style="font-family:DM Sans,sans-serif;font-size:13px;max-width:440px;margin:0 auto;line-height:1.7;">
+            Every response is routed using predictive carbon intelligence,
+            multi-region comparison, and self-learning adaptive thresholds.
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -494,21 +593,19 @@ for msg in st.session_state.messages:
     if msg["role"] == "user":
         st.markdown(f'<div class="bubble-label" style="text-align:right;">YOU</div><div class="bubble-user">{msg["content"]}</div>', unsafe_allow_html=True)
     elif msg["role"] == "assistant":
-        receipt = msg.get("receipt", {})
-        mode = receipt.get("mode", "")
-        model_name = receipt.get("model_name", receipt.get("model_used", ""))
-        co2_saved = receipt.get("co2_saved_g", 0)
-        energy_pct = receipt.get("energy_saved_pct", 0)
+        receipt      = msg.get("receipt", {})
+        mode         = receipt.get("mode", "")
+        model_name   = receipt.get("model_name", receipt.get("model_used", ""))
+        co2_saved    = receipt.get("co2_saved_g", 0)
+        energy_pct   = receipt.get("energy_saved_pct", 0)
         intensity_val = receipt.get("grid_intensity_gco2_kwh", 0)
-        impact_red = receipt.get("impact_reduction_pct", 0)
-        latency = receipt.get("latency_ms", 0)
-        co2_this = receipt.get("co2_this_query_g", 0)
-
-        # Budget receipt fields
-        b_limit = receipt.get("budget_limit_g")
-        b_used = receipt.get("budget_used_g")
-        b_pct = receipt.get("budget_pct")
-        b_pressure = receipt.get("budget_pressure", "NONE")
+        impact_red   = receipt.get("impact_reduction_pct", 0)
+        latency      = receipt.get("latency_ms", 0)
+        co2_this     = receipt.get("co2_this_query_g", 0)
+        b_limit      = receipt.get("budget_limit_g")
+        b_used       = receipt.get("budget_used_g")
+        b_pct        = receipt.get("budget_pct")
+        b_pressure   = receipt.get("budget_pressure", "NONE")
 
         st.markdown(f'<div class="bubble-label">GREENWEAVE AI</div><div class="bubble-ai">{msg["content"]}</div>', unsafe_allow_html=True)
 
@@ -557,7 +654,7 @@ with col1:
     user_input = st.text_input(
         label="prompt",
         label_visibility="collapsed",
-        placeholder="Ask anything — GreenWeave will route to the most climate-appropriate model…",
+        placeholder="Ask anything — GreenWeave routes using predictive carbon intelligence…",
         key="user_input",
     )
 with col2:
@@ -572,11 +669,11 @@ if send and user_input.strip():
         if m["role"] in ("user", "assistant")
     ]
 
-    with st.spinner("🌿 Routing to climate-appropriate model…"):
+    with st.spinner("🌿 Routing via predictive carbon intelligence…"):
         try:
-            result = send_message(api_messages, task_type, weight_profile)
+            result        = send_message(api_messages, task_type, weight_profile)
             response_text = result.get("response", "")
-            receipt = result.get("carbon_receipt", {})
+            receipt       = result.get("carbon_receipt", {})
 
             st.session_state.messages.append({
                 "role": "assistant",
