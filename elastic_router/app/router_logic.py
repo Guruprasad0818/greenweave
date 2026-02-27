@@ -9,6 +9,7 @@ from app.redis_service import get_carbon_state
 from app.logger import get_logger
 import redis
 import json
+import os  # NEW: imported os to read Docker environment variables
 
 logger = get_logger("router_logic")
 
@@ -21,8 +22,12 @@ TASK_ACCURACY_FLOOR: dict[str, float] = {
     "medical":        1.0,
 }
 
-# Redis connection for budget tracking
-_redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+# Redis connection for budget tracking - fixed to work with Docker!
+_redis_client = redis.Redis(
+    host=os.getenv("REDIS_HOST", "redis"), 
+    port=int(os.getenv("REDIS_PORT", 6379)), 
+    decode_responses=True
+)
 
 BUDGET_KEY = "carbon_budget"          # stores { "limit_g": 2000, "used_g": 0.0 }
 

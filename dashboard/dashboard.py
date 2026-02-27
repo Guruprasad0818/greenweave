@@ -8,7 +8,7 @@ import time
 import requests
 import streamlit as st
 
-ROUTER_URL = "http://localhost:8000"
+ROUTER_URL = "http://elastic_router:8000"
 
 st.set_page_config(
     page_title="GreenWeave AI",
