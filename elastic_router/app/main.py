@@ -10,6 +10,7 @@ Endpoints:
   POST /budget/set           — Set a carbon budget
   POST /budget/reset         — Reset budget usage to 0
   GET  /engine/status        — Predictive + Multi-Region + Self-Learning metrics
+  GET  /stats                — ESG aggregate stats (used by dashboard — no DB file access needed)
 """
 
 import time
@@ -32,7 +33,7 @@ from app.router_logic import (
 from app.impact_model import calculate_impact
 from app.llm_client import call_model
 from app.receipt_builder import build_receipt
-from app.database import init_db, log_receipt  # NEW IMPORT
+from app.database import init_db, log_receipt, get_stats
 
 logger = get_logger("main")
 
@@ -72,7 +73,7 @@ class BudgetSetRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🌿 GreenWeave Elastic Router starting up…")
-    init_db()  # NEW: Initialize the database
+    init_db()
     state = get_carbon_state()
     logger.info(
         "Initial carbon state: %s @ %s gCO₂/kWh [%s]",
@@ -127,7 +128,7 @@ async def chat_completions(request: ChatRequest):
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         logger.error("Unexpected LLM error: %s", exc)
-        raise HTTPException(status_code=500, detail="LLM inference failed")
+        raise HTTPException(status_code=500, detail=f"LLM inference failed: {exc}")
 
     total_latency = (time.perf_counter() - t_start) * 1000
 
@@ -143,29 +144,31 @@ async def chat_completions(request: ChatRequest):
         weight_profile=profile,
     )
 
-    # NEW: Log to persistent SQLite database
-    # Assuming baseline_co2_g is roughly co2_this_query_g + co2_saved_g
-    baseline_co2 = receipt.get("co2_this_query_g", 0) + receipt.get("co2_saved_g", 0)
+    # Log to persistent SQLite database
     log_receipt(
         model_used=chosen_model.model_id,
         intensity=carbon_intensity,
         actual_co2=receipt.get("co2_this_query_g", 0),
-        baseline_co2=baseline_co2,
+        baseline_co2=receipt.get("baseline_co2_g", 0),
         co2_saved=receipt.get("co2_saved_g", 0),
-        energy_saved=receipt.get("energy_saved_pct", 0)
+        energy_saved=receipt.get("energy_saved_pct", 0),
+        mode=receipt.get("mode", ""),
+        impact_reduction_pct=receipt.get("impact_reduction_pct", 0),
+        latency_ms=receipt.get("latency_ms", 0),
     )
 
-    # Inject budget state into receipt
+    # THE BUG FIX: Only calculate percentages if the limit is greater than 0!
     budget = get_budget()
-    if budget:
+    if budget and budget.get("limit_g", 0) > 0:
         receipt["budget_limit_g"] = budget["limit_g"]
-        receipt["budget_used_g"] = round(budget["used_g"], 4)
+        receipt["budget_used_g"]  = round(budget["used_g"], 4)
         receipt["budget_pressure"] = get_budget_pressure()
         receipt["budget_pct"] = round((budget["used_g"] / budget["limit_g"]) * 100, 1)
 
     logger.info(
-        "✅ Request complete | model=%s | latency=%.0fms | CO₂=%.5fg",
-        chosen_model.model_id, total_latency, impact.chosen_co2_g,
+        "✅ Request complete | model=%s | latency=%.0fms | CO₂=%.5fg | energy_saved=%.1f%%",
+        chosen_model.model_id, total_latency,
+        impact.chosen_co2_g, receipt.get("energy_saved_pct", 0),
     )
 
     return ChatResponse(
@@ -228,6 +231,22 @@ async def health():
 
 
 # ─────────────────────────────────────────────
+#  NEW: /stats — ESG aggregate data via API
+#  Dashboard reads this instead of DB file directly.
+#  Solves the Docker container isolation problem.
+# ─────────────────────────────────────────────
+
+@app.get("/stats")
+async def esg_stats():
+    """
+    Returns aggregated ESG metrics from the SQLite DB.
+    The dashboard calls this API endpoint instead of reading
+    the DB file, which doesn't work across Docker containers.
+    """
+    return get_stats()
+
+
+# ─────────────────────────────────────────────
 #  Engine Status — Predictive + Multi-Region + Self-Learning
 # ─────────────────────────────────────────────
 
@@ -235,8 +254,6 @@ async def health():
 async def engine_status():
     """
     Returns Predictive Carbon + Follow-the-Sun + Self-Learning metrics.
-    Integrates with grid_monitor's prediction_service, region_router,
-    and self_learning_engine via live Redis state.
     """
     carbon = get_carbon_state()
     live_intensity = carbon.get("carbon_intensity", 350)
@@ -245,7 +262,9 @@ async def engine_status():
     # ── Predictive Carbon Optimization ───────────────────────────
     solar_now  = max(0, math.sin(math.pi * (hour - 6) / 12))
     solar_next = max(0, math.sin(math.pi * (hour + 1 - 6) / 12))
-    predicted_next_hour = int(live_intensity - (solar_next - solar_now) * 200 + random.randint(-20, 20))
+    predicted_next_hour = int(
+        live_intensity - (solar_next - solar_now) * 200 + random.randint(-20, 20)
+    )
     predicted_next_hour = max(80, min(750, predicted_next_hour))
 
     if predicted_next_hour < live_intensity - 30:
@@ -255,7 +274,7 @@ async def engine_status():
     else:
         trend = "STABLE"
 
-    delay_execution = (live_intensity > 400 and trend == "IMPROVING")
+    delay_execution = live_intensity > 400 and trend == "IMPROVING"
 
     # ── Follow-the-Sun Multi-Region ───────────────────────────────
     region_offsets = {"IN": 5.5, "EU": 0, "US-W": -8, "SG": 8}
@@ -267,36 +286,38 @@ async def engine_status():
         r_intensity = max(80, min(750, r_intensity))
 
         solar_next_r = max(0, math.sin(math.pi * (regional_hour + 1 - 6) / 12))
-        r_predicted = int(r_intensity - (solar_next_r - solar) * 200)
-        if r_predicted < r_intensity - 30:   r_trend = "IMPROVING"
-        elif r_predicted > r_intensity + 30: r_trend = "WORSENING"
-        else:                                r_trend = "STABLE"
+        r_predicted  = int(r_intensity - (solar_next_r - solar) * 200)
+
+        if r_predicted < r_intensity - 30:    r_trend = "IMPROVING"
+        elif r_predicted > r_intensity + 30:  r_trend = "WORSENING"
+        else:                                 r_trend = "STABLE"
 
         regions[region_name] = {
             "intensity": r_intensity,
-            "trend": r_trend,
-            "model": "Llama-3.1-8B" if r_intensity > 500 else "Llama-3.3-70B",
+            "trend":     r_trend,
+            "model":     "Llama-3.1-8B" if r_intensity > 500 else "Llama-3.3-70B",
         }
 
     best_region = min(regions, key=lambda r: regions[r]["intensity"])
 
     # ── Self-Learning Engine ──────────────────────────────────────
-    minutes_today = hour * 60 + datetime.now().minute
-    base_confidence = min(0.95, 0.55 + (minutes_today / 1440) * 0.4)
-    confidence = round(base_confidence + random.uniform(-0.02, 0.02), 2)
-    confidence = max(0.50, min(0.98, confidence))
+    minutes_today    = hour * 60 + datetime.now().minute
+    base_confidence  = min(0.95, 0.55 + (minutes_today / 1440) * 0.4)
+    confidence       = round(base_confidence + random.uniform(-0.02, 0.02), 2)
+    confidence       = max(0.50, min(0.98, confidence))
     adaptive_threshold = round(0.2 + (1 - confidence) * 0.3, 2)
 
     return {
-        "regions": regions,
-        "best_region": best_region,
-        "delay_execution": delay_execution,
-        "adaptive_threshold": adaptive_threshold,
-        "learning_confidence": confidence,
+        "regions":                      regions,
+        "best_region":                  best_region,
+        "delay_execution":              delay_execution,
+        "adaptive_threshold":           adaptive_threshold,
+        "learning_confidence":          confidence,
         "predicted_next_hour_intensity": predicted_next_hour,
-        "trend": trend,
-        "live_intensity": live_intensity,
+        "trend":                        trend,
+        "live_intensity":               live_intensity,
     }
+
 
 if __name__ == "__main__":
     import uvicorn

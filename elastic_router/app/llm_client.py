@@ -71,6 +71,7 @@ def _call_openai_compatible(
     api_key: str,
 ) -> LLMResponse:
     from openai import OpenAI
+    import httpx  # IMPORTED HTTPX TO FIX THE PROXY BUG
 
     base_url = (
         "https://api.groq.com/openai/v1"
@@ -78,7 +79,15 @@ def _call_openai_compatible(
         else None            # OpenAI default
     )
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    # FIX: We build the custom HTTP client ourselves to stop the OpenAI library 
+    # from crashing when it tries to use the deleted 'proxies' keyword!
+    custom_http_client = httpx.Client()
+
+    client = OpenAI(
+        api_key=api_key, 
+        base_url=base_url,
+        http_client=custom_http_client  # Passing our bug-free client
+    )
 
     # Prepend system message if provided
     full_messages = []
