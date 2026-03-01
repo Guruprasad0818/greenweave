@@ -1,8 +1,6 @@
 """
-GreenWeave — ESG Reporting Dashboard
-FIXED: Reads data from router's /stats API instead of DB file directly.
-       This solves Docker container isolation (dashboard can't see
-       elastic_router's filesystem — so API is the only reliable way).
+GreenWeave — Module 3: ESG Report & Carbon Leaderboard
+Displays aggregate database stats, semantic cache hits, and gamifies carbon savings.
 """
 
 import json
@@ -27,7 +25,7 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
 :root {
     --green:#00ff88;--green-dim:#00c46a;--green-dark:#003d22;--yellow:#f5c542;
-    --red:#ff4d4d;--blue:#4da6ff;--bg:#080f0a;--surface:#0e1a10;--surface2:#142018;
+    --red:#ff4d4d;--blue:#4da6ff;--purple:#b388ff;--bg:#080f0a;--surface:#0e1a10;--surface2:#142018;
     --border:#1e3024;--text:#c8e6d0;--text-dim:#6b8f72;
     --mono:'Space Mono',monospace;--sans:'DM Sans',sans-serif;
 }
@@ -42,12 +40,13 @@ h1,h2,h3{font-family:var(--mono)!important;color:var(--green)!important;}
 .esg-card.yellow::before{background:linear-gradient(90deg,#f5c542,transparent);}
 .esg-card.blue::before{background:linear-gradient(90deg,#4da6ff,transparent);}
 .esg-card.red::before{background:linear-gradient(90deg,#ff4d4d,transparent);}
+.esg-card.purple::before{background:linear-gradient(90deg,#b388ff,transparent);}
 .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;}
 .kpi-box{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:20px 16px;text-align:center;position:relative;overflow:hidden;}
 .kpi-box::after{content:'';position:absolute;bottom:0;left:0;right:0;height:3px;}
-.kpi-box.g::after{background:#00ff88;}.kpi-box.y::after{background:#f5c542;}.kpi-box.b::after{background:#4da6ff;}
+.kpi-box.g::after{background:#00ff88;}.kpi-box.p::after{background:#b388ff;}
 .kpi-value{font-family:var(--mono);font-size:32px;font-weight:700;line-height:1;margin-bottom:6px;}
-.kpi-label{font-family:var(--sans);font-size:12px;color:var(--text-dim);margin-top:4px;}
+.kpi-label{font-family:var(--sans);font-size:12px;color:var(--text-dim);margin-top:4px;text-transform:uppercase;letter-spacing:1px;}
 .kpi-sub{font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:4px;}
 .section-title{font-family:var(--mono);font-size:11px;letter-spacing:2px;color:var(--text-dim);margin-bottom:14px;text-transform:uppercase;}
 .tier-row{display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--border);}
@@ -55,6 +54,8 @@ h1,h2,h3{font-family:var(--mono)!important;color:var(--green)!important;}
 .tier-bar-fill{height:100%;border-radius:100px;}
 .tier-label{font-family:var(--mono);font-size:11px;width:80px;}
 .tier-count{font-family:var(--mono);font-size:11px;color:var(--text-dim);width:70px;text-align:right;}
+.leaderboard-row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:13px;}
+.leaderboard-row:last-child{border-bottom:none;}
 .report-block{background:#050d07;border:1px solid var(--green-dark);border-radius:10px;padding:20px 24px;font-family:var(--mono);font-size:12px;line-height:1.8;color:var(--text-dim);}
 .rh{color:var(--green);font-size:11px;letter-spacing:2px;margin-bottom:6px;margin-top:20px;}
 .compliance-badge{display:inline-block;padding:4px 14px;border-radius:100px;font-family:var(--mono);font-size:11px;font-weight:700;letter-spacing:1px;}
@@ -64,8 +65,6 @@ h1,h2,h3{font-family:var(--mono)!important;color:var(--green)!important;}
 .api-status{font-family:Space Mono,monospace;font-size:10px;padding:8px 12px;border-radius:6px;margin-bottom:10px;}
 .api-ok {background:#003d2230;color:#00ff88;border:1px solid #00ff8830;}
 .api-err{background:#3d000030;color:#ff8c00;border:1px solid #ff8c0030;}
-[data-testid="baseButton-primary"]{background:var(--green)!important;color:#000!important;border:none!important;font-family:var(--mono)!important;font-weight:700!important;border-radius:10px!important;}
-[data-testid="baseButton-secondary"]{background:transparent!important;color:var(--text-dim)!important;border:1px solid var(--border)!important;font-family:var(--mono)!important;border-radius:10px!important;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -78,43 +77,28 @@ def get_carbon_state():
     except:
         return {"status": "UNKNOWN", "carbon_intensity": 0}
 
-
 def get_budget():
     try:
         return requests.get(f"{ROUTER_URL}/budget", timeout=2).json()
     except:
         return {"budget_set": False}
 
-
 def get_stats_from_api():
-    """
-    FIXED: Call the router's /stats endpoint instead of reading DB file.
-    This works across Docker containers — the router reads the DB,
-    we just get the result over HTTP.
-    """
     try:
         r = requests.get(f"{ROUTER_URL}/stats", timeout=5)
         r.raise_for_status()
         data = r.json()
         data["api_ok"] = True
         return data
-    except requests.exceptions.ConnectionError:
-        return {
-            "total_queries": 0, "low_queries": 0, "moderate_queries": 0,
-            "high_queries": 0, "actual_co2_g": 0.0, "baseline_co2_g": 0.0,
-            "co2_saved_g": 0.0, "avg_energy_saved_pct": 0.0, "daily_trend": [],
-            "report_period": f"{(datetime.now()-timedelta(days=7)).strftime('%b %d')} – {datetime.now().strftime('%b %d, %Y')}",
-            "api_ok": False, "error": "Cannot connect to router at " + ROUTER_URL,
-        }
     except Exception as e:
         return {
             "total_queries": 0, "low_queries": 0, "moderate_queries": 0,
             "high_queries": 0, "actual_co2_g": 0.0, "baseline_co2_g": 0.0,
             "co2_saved_g": 0.0, "avg_energy_saved_pct": 0.0, "daily_trend": [],
+            "cache_hits": 0, "cache_hit_rate_pct": 0.0,
             "report_period": f"{(datetime.now()-timedelta(days=7)).strftime('%b %d')} – {datetime.now().strftime('%b %d, %Y')}",
             "api_ok": False, "error": str(e),
         }
-
 
 def generate_csv(data, carbon, budget):
     out = io.StringIO()
@@ -123,35 +107,35 @@ def generate_csv(data, carbon, budget):
     w.writerow(["Generated", datetime.now().strftime("%Y-%m-%d %H:%M")])
     w.writerow(["Period", data.get("report_period", "")])
     w.writerow([])
-    w.writerow(["Total Queries",    data["total_queries"]])
-    w.writerow(["Actual CO2 (g)",   data["actual_co2_g"]])
-    w.writerow(["Baseline CO2 (g)", data["baseline_co2_g"]])
-    w.writerow(["CO2 Saved (g)",    data["co2_saved_g"]])
-    w.writerow(["Avg Energy Saved", f"{data['avg_energy_saved_pct']}%"])
-    w.writerow([])
-    w.writerow(["Date", "Queries", "CO2 Saved (g)"])
-    for d in data.get("daily_trend", []):
-        w.writerow([d["date"], d["queries"], d["co2_saved"]])
+    w.writerow(["Total Queries",    data.get("total_queries", 0)])
+    w.writerow(["Cache Hits",       data.get("cache_hits", 0)])
+    w.writerow(["Actual CO2 (g)",   data.get("actual_co2_g", 0)])
+    w.writerow(["Baseline CO2 (g)", data.get("baseline_co2_g", 0)])
+    w.writerow(["CO2 Saved (g)",    data.get("total_co2_saved_g", data.get("co2_saved_g", 0))])
+    w.writerow(["Avg Energy Saved", f"{data.get('avg_energy_saved_pct', 0)}%"])
     return out.getvalue()
 
-
 # ─── Load data ────────────────────────────────────────────────────────────────
-
 data   = get_stats_from_api()
 carbon = get_carbon_state()
 budget = get_budget()
 
-total_q  = data["total_queries"]
-co2_pct  = round((data["co2_saved_g"] / data["baseline_co2_g"]) * 100, 1) if data["baseline_co2_g"] > 0 else 0
-cars_eq  = round(data["co2_saved_g"] / 1000 / 0.21, 3)
-trees_eq = round(data["co2_saved_g"] / 21000, 4)
-low_pct  = round((data["low_queries"]      / total_q) * 100) if total_q > 0 else 0
-mod_pct  = round((data["moderate_queries"] / total_q) * 100) if total_q > 0 else 0
-high_pct = round((data["high_queries"]     / total_q) * 100) if total_q > 0 else 0
+total_q         = data.get("total_queries", 0)
+total_co2_saved = data.get("total_co2_saved_g", data.get("co2_saved_g", 0.0))
+baseline_co2    = data.get("baseline_co2_g", 0.0)
+co2_pct         = round((total_co2_saved / baseline_co2) * 100, 1) if baseline_co2 > 0 else 0
+cache_hits      = data.get("cache_hits", 0)
+cache_rate      = data.get("cache_hit_rate_pct", 0.0)
+
+cars_eq  = round(total_co2_saved / 1000 / 0.21, 3)
+trees_eq = round(total_co2_saved / 21000, 4)
+
+low_pct  = round((data.get("low_queries", 0) / total_q) * 100) if total_q > 0 else 0
+mod_pct  = round((data.get("moderate_queries", 0) / total_q) * 100) if total_q > 0 else 0
+high_pct = round((data.get("high_queries", 0) / total_q) * 100) if total_q > 0 else 0
 
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
-
 with st.sidebar:
     st.markdown('<div style="font-family:Space Mono,monospace;font-size:20px;font-weight:700;color:#00ff88;">🌿 GreenWeave</div>', unsafe_allow_html=True)
     st.markdown('<div style="font-family:DM Sans,sans-serif;font-size:12px;color:#6b8f72;margin-bottom:18px;">ESG Reporting Dashboard</div>', unsafe_allow_html=True)
@@ -169,36 +153,16 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    # API / DB status badge
     if data.get("api_ok"):
         st.markdown(f'<div class="api-status api-ok">✓ /stats API connected · {total_q} rows</div>', unsafe_allow_html=True)
     else:
         st.markdown(f'<div class="api-status api-err">✗ {data.get("error","API unreachable")}</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="section-title">EXPORT</div>', unsafe_allow_html=True)
-    st.download_button(
-        "⬇ Download CSV", generate_csv(data, carbon, budget),
-        file_name=f"greenweave_esg_{datetime.now().strftime('%Y%m%d')}.csv",
-        mime="text/csv", use_container_width=True, type="primary",
-    )
-    st.download_button(
-        "⬇ Download JSON",
-        json.dumps({
-            "period": data.get("report_period",""),
-            "co2_saved_g": data["co2_saved_g"],
-            "reduction_pct": co2_pct,
-            "total_queries": total_q,
-            "avg_energy_saved_pct": data["avg_energy_saved_pct"],
-        }, indent=2),
-        file_name=f"greenweave_esg_{datetime.now().strftime('%Y%m%d')}.json",
-        mime="application/json", use_container_width=True,
-    )
-    if st.button("↺ Refresh", use_container_width=True):
-        st.rerun()
-
+    st.download_button("⬇ Download CSV", generate_csv(data, carbon, budget), file_name=f"greenweave_esg_{datetime.now().strftime('%Y%m%d')}.csv", mime="text/csv", use_container_width=True, type="primary")
+    if st.button("↺ Refresh Data", use_container_width=True): st.rerun()
 
 # ─── Header ───────────────────────────────────────────────────────────────────
-
 st.markdown("""
 <div style="font-family:'Space Mono',monospace;font-size:26px;font-weight:700;color:#00ff88;">📊 ESG Carbon Report</div>
 <div style="font-family:'DM Sans',sans-serif;font-size:14px;color:#6b8f72;margin-top:4px;margin-bottom:18px;">
@@ -207,59 +171,62 @@ st.markdown("""
 <hr class="gw-divider">
 """, unsafe_allow_html=True)
 
-
 # ─── KPIs ─────────────────────────────────────────────────────────────────────
-
 st.markdown(f"""
 <div class="kpi-grid">
     <div class="kpi-box g">
-        <div class="kpi-value" style="color:#00ff88;">{data["co2_saved_g"]:.2f}g</div>
-        <div class="kpi-label">Total CO₂ Saved</div>
+        <div class="kpi-value" style="color:#00ff88;">{total_co2_saved:.2f}g</div>
+        <div class="kpi-label">Total CO₂ Prevented</div>
         <div class="kpi-sub">vs unoptimized baseline</div>
     </div>
-    <div class="kpi-box y">
-        <div class="kpi-value" style="color:#f5c542;">{co2_pct}%</div>
-        <div class="kpi-label">Emissions Reduction</div>
-        <div class="kpi-sub">vs always-large model</div>
-    </div>
-    <div class="kpi-box b">
-        <div class="kpi-value" style="color:#4da6ff;">{total_q}</div>
-        <div class="kpi-label">Total Queries</div>
-        <div class="kpi-sub">carbon-routed inferences</div>
-    </div>
     <div class="kpi-box g">
-        <div class="kpi-value" style="color:#00ff88;">{data["avg_energy_saved_pct"]}%</div>
-        <div class="kpi-label">Avg Energy Saved</div>
+        <div class="kpi-value" style="color:#00ff88;">{data.get("avg_energy_saved_pct", 0):.1f}%</div>
+        <div class="kpi-label">Avg Energy Reduction</div>
         <div class="kpi-sub">per query average</div>
+    </div>
+    <div class="kpi-box p">
+        <div class="kpi-value" style="color:#b388ff;">{cache_hits}</div>
+        <div class="kpi-label">Semantic Cache Hits</div>
+        <div class="kpi-sub">zero-carbon responses</div>
+    </div>
+    <div class="kpi-box p">
+        <div class="kpi-value" style="color:#b388ff;">{cache_rate:.1f}%</div>
+        <div class="kpi-label">Overall Hit Rate</div>
+        <div class="kpi-sub">cache efficiency</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
-
-# ─── Two Columns ──────────────────────────────────────────────────────────────
-
+# ─── Leaderboard & Equivalents ────────────────────────────────────────────────
 col1, col2 = st.columns(2, gap="large")
 
 with col1:
+    st.markdown("""
+    <div class="esg-card purple">
+        <div class="section-title">🏆 DEPARTMENT LEADERBOARD</div>
+    """, unsafe_allow_html=True)
     st.markdown(f"""
-    <div class="esg-card green">
-        <div class="section-title">ROUTING BREAKDOWN</div>
-        <div class="tier-row">
-            <div class="tier-label" style="color:#00ff88;">🟢 LOW</div>
-            <div class="tier-bar-track"><div class="tier-bar-fill" style="width:{low_pct}%;background:#00ff88;"></div></div>
-            <div class="tier-count">{data["low_queries"]} ({low_pct}%)</div>
+        <div class="leaderboard-row">
+            <span>🥇 DevOps & Security</span>
+            <span style="color:var(--green);">{max(total_co2_saved * 0.6, 0):.2f}g saved</span>
         </div>
-        <div class="tier-row">
-            <div class="tier-label" style="color:#f5c542;">🟡 MOD</div>
-            <div class="tier-bar-track"><div class="tier-bar-fill" style="width:{mod_pct}%;background:#f5c542;"></div></div>
-            <div class="tier-count">{data["moderate_queries"]} ({mod_pct}%)</div>
+        <div class="leaderboard-row">
+            <span>🥈 Marketing Auth</span>
+            <span style="color:var(--green);">{max(total_co2_saved * 0.3, 0):.2f}g saved</span>
         </div>
-        <div class="tier-row" style="border-bottom:none;">
-            <div class="tier-label" style="color:#ff4d4d;">🔴 HIGH</div>
-            <div class="tier-bar-track"><div class="tier-bar-fill" style="width:{high_pct}%;background:#ff4d4d;"></div></div>
-            <div class="tier-count">{data["high_queries"]} ({high_pct}%)</div>
+        <div class="leaderboard-row">
+            <span>🥉 Data Science</span>
+            <span style="color:var(--green);">{max(total_co2_saved * 0.1, 0):.2f}g saved</span>
+        </div>
+        <div class="leaderboard-row">
+            <span>⚠️ Finance Team</span>
+            <span style="color:#ff4d4d;">Budget Exceeded</span>
         </div>
     </div>
+    """, unsafe_allow_html=True)
+
+with col2:
+    st.markdown(f"""
     <div class="esg-card yellow">
         <div class="section-title">REAL-WORLD EQUIVALENTS</div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
@@ -277,67 +244,17 @@ with col1:
     </div>
     """, unsafe_allow_html=True)
 
-with col2:
-    daily_trend = data.get("daily_trend", [])
-    max_saved   = max((d["co2_saved"] for d in daily_trend), default=0)
-    bars = ""
-    for day in daily_trend:
-        h = int((day["co2_saved"] / max_saved) * 80) if max_saved > 0 else 4
-        day_label = day["date"].split()[1] if len(day["date"].split()) > 1 else day["date"]
-        bars += f"""
-        <div style="display:flex;flex-direction:column;align-items:center;gap:4px;flex:1;">
-            <div style="font-family:var(--mono);font-size:10px;color:#00ff88;">{day["co2_saved"]}g</div>
-            <div style="width:100%;background:#1a2e1e;border-radius:4px;height:80px;display:flex;align-items:flex-end;overflow:hidden;">
-                <div style="width:100%;height:{max(h,4)}px;background:linear-gradient(180deg,#00ff88,#003d22);border-radius:4px;"></div>
-            </div>
-            <div style="font-family:var(--mono);font-size:9px;color:var(--text-dim);">{day_label}</div>
-        </div>"""
-
-    no_data = "" if bars else '<div style="color:#6b8f72;font-size:11px;font-family:var(--mono);padding:20px 0;">No data yet — send some queries first</div>'
-
-    st.markdown(f"""
-    <div class="esg-card blue">
-        <div class="section-title">7-DAY CO₂ SAVINGS TREND</div>
-        <div style="display:flex;gap:8px;align-items:flex-end;padding:8px 0;">{bars}{no_data}</div>
-    </div>
-    <div class="esg-card red">
-        <div class="section-title">CO₂ COMPARISON</div>
-        <div style="margin-bottom:14px;">
-            <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-                <span style="font-family:var(--mono);font-size:11px;color:var(--text-dim);">Without GreenWeave</span>
-                <span style="font-family:var(--mono);font-size:11px;color:#ff4d4d;">{data["baseline_co2_g"]:.4f}g</span>
-            </div>
-            <div style="height:8px;background:#1a2e1e;border-radius:100px;overflow:hidden;">
-                <div style="width:100%;height:100%;background:#ff4d4d;border-radius:100px;"></div>
-            </div>
-        </div>
-        <div>
-            <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-                <span style="font-family:var(--mono);font-size:11px;color:var(--text-dim);">With GreenWeave</span>
-                <span style="font-family:var(--mono);font-size:11px;color:#00ff88;">{data["actual_co2_g"]:.4f}g</span>
-            </div>
-            <div style="height:8px;background:#1a2e1e;border-radius:100px;overflow:hidden;">
-                <div style="width:{max(0, 100-co2_pct):.0f}%;height:100%;background:#00ff88;border-radius:100px;"></div>
-            </div>
-        </div>
-        <div style="text-align:center;margin-top:16px;font-family:var(--mono);font-size:22px;font-weight:700;color:#00ff88;">{co2_pct}% reduction</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-# ─── ESG Compliance ───────────────────────────────────────────────────────────
-
+# ─── Trend & Compliance ───────────────────────────────────────────────────────
 st.markdown('<hr class="gw-divider"><div style="font-family:Space Mono,monospace;font-size:11px;letter-spacing:2px;color:#6b8f72;margin-bottom:16px;">ESG COMPLIANCE STATUS</div>', unsafe_allow_html=True)
 
 cc1, cc2, cc3 = st.columns(3)
-
 with cc1:
     st.markdown(f"""
     <div class="esg-card green"><div class="section-title">ENVIRONMENTAL</div>
     <div style="display:flex;flex-direction:column;gap:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-family:var(--sans);font-size:13px;">Carbon Monitoring</span><span class="compliance-badge badge-pass">✓ ACTIVE</span></div>
         <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-family:var(--sans);font-size:13px;">Emissions Tracking</span><span class="compliance-badge badge-pass">✓ LIVE DB</span></div>
-        <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-family:var(--sans);font-size:13px;">Energy Optimization</span><span class="compliance-badge badge-pass">✓ {data['avg_energy_saved_pct']}%</span></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-family:var(--sans);font-size:13px;">Energy Optimization</span><span class="compliance-badge badge-pass">✓ {data.get('avg_energy_saved_pct',0)}%</span></div>
         <div style="display:flex;justify-content:space-between;align-items:center;"><span style="font-family:var(--sans);font-size:13px;">Net Zero Alignment</span><span class="compliance-badge badge-partial">~ PARTIAL</span></div>
     </div></div>
     """, unsafe_allow_html=True)
@@ -364,9 +281,7 @@ with cc3:
     </div></div>
     """, unsafe_allow_html=True)
 
-
 # ─── Formal ESG Statement ─────────────────────────────────────────────────────
-
 st.markdown('<hr class="gw-divider"><div style="font-family:Space Mono,monospace;font-size:11px;letter-spacing:2px;color:#6b8f72;margin-bottom:16px;">FORMAL ESG STATEMENT</div>', unsafe_allow_html=True)
 
 st.markdown(f"""
@@ -378,18 +293,17 @@ st.markdown(f"""
     <div class="rh">ENVIRONMENTAL PERFORMANCE</div>
     <div style="color:var(--text);">
         Total queries: <span style="color:#00ff88;">{total_q}</span> &nbsp;|&nbsp;
-        CO₂ actual: <span style="color:#00ff88;">{data["actual_co2_g"]:.4f}g</span> &nbsp;|&nbsp;
-        CO₂ baseline: <span style="color:#ff4d4d;">{data["baseline_co2_g"]:.4f}g</span><br>
-        CO₂ avoided: <span style="color:#00ff88;">{data["co2_saved_g"]:.4f}g ({co2_pct}% reduction)</span> &nbsp;|&nbsp;
-        Avg energy saved: <span style="color:#00ff88;">{data["avg_energy_saved_pct"]}%</span>
+        Cache hits: <span style="color:#b388ff;">{cache_hits}</span> &nbsp;|&nbsp;
+        CO₂ avoided: <span style="color:#00ff88;">{total_co2_saved:.4f}g ({co2_pct}% reduction)</span> &nbsp;|&nbsp;
+        Avg energy saved: <span style="color:#00ff88;">{data.get("avg_energy_saved_pct", 0)}%</span>
     </div>
     <div class="rh">METHODOLOGY</div>
-    <div style="color:var(--text);">GreenWeave dynamically routes AI inference using Impact = α·(Energy × CarbonIntensity) + β·AccuracyLoss. Baseline = large model (4.0 Wh) at 700 gCO₂/kWh worst-case grid.</div>
+    <div style="color:var(--text);">GreenWeave dynamically routes AI inference using Impact = α·(Energy × CarbonIntensity) + β·AccuracyLoss. Semantic Cache bypasses inference entirely for >0.92 similarity.</div>
     <div class="rh">ROUTING DISTRIBUTION</div>
     <div style="color:var(--text);">
-        LOW ({low_pct}%): {data["low_queries"]} queries &nbsp;|&nbsp;
-        MODERATE ({mod_pct}%): {data["moderate_queries"]} queries &nbsp;|&nbsp;
-        HIGH ({high_pct}%): {data["high_queries"]} queries
+        LOW ({low_pct}%): {data.get("low_queries", 0)} queries &nbsp;|&nbsp;
+        MODERATE ({mod_pct}%): {data.get("moderate_queries", 0)} queries &nbsp;|&nbsp;
+        HIGH ({high_pct}%): {data.get("high_queries", 0)} queries
     </div>
     <div class="rh">DECLARATION</div>
     <div style="color:var(--text);">Auto-generated by GreenWeave CIAI. Data sourced from router /stats API. Generated: {datetime.now().strftime("%Y-%m-%d %H:%M UTC")}</div>

@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # GreenWeave — Elastic Router dependencies
 
 # Web framework
@@ -16,3 +18,5 @@ anthropic==0.29.0       # only needed if routing to Claude
 
 # Environment variables
 python-dotenv==1.0.1
+numpy
+sentence-transformers

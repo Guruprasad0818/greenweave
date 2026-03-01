@@ -2,3 +2,4 @@ requests
 redis
 python-dotenv
 tenacity
+numpy

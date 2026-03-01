@@ -1,0 +1,7 @@
+README.md
+setup.py
+greenweave_sdk.egg-info/PKG-INFO
+greenweave_sdk.egg-info/SOURCES.txt
+greenweave_sdk.egg-info/dependency_links.txt
+greenweave_sdk.egg-info/requires.txt
+greenweave_sdk.egg-info/top_level.txt
