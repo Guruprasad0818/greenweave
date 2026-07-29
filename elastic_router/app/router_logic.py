@@ -37,33 +37,46 @@ BUDGET_KEY = "carbon_budget"          # stores { "limit_g": 2000, "used_g": 0.0 
 # ─────────────────────────────────────────────
 
 def set_budget(limit_g: float):
-    """Set a new carbon budget (resets usage to 0)."""
-    _redis_client.set(BUDGET_KEY, json.dumps({"limit_g": limit_g, "used_g": 0.0}))
-    logger.info("Carbon budget set: %.1f g CO₂", limit_g)
+    """Set a new carbon budget (resets usage to 0). No-ops if Redis is unreachable."""
+    try:
+        _redis_client.set(BUDGET_KEY, json.dumps({"limit_g": limit_g, "used_g": 0.0}))
+        logger.info("Carbon budget set: %.1f g CO₂", limit_g)
+    except redis.RedisError as exc:
+        logger.error("set_budget failed — Redis unreachable: %s", exc)
 
 
 def get_budget() -> dict | None:
-    """Get current budget state. Returns None if no budget set."""
-    raw = _redis_client.get(BUDGET_KEY)
-    if raw:
-        return json.loads(raw)
-    return None
+    """Get current budget state. Returns None if no budget set or Redis is unreachable."""
+    try:
+        raw = _redis_client.get(BUDGET_KEY)
+        if raw:
+            return json.loads(raw)
+        return None
+    except (redis.RedisError, json.JSONDecodeError) as exc:
+        logger.error("get_budget failed — Redis unreachable or malformed: %s", exc)
+        return None
 
 
 def add_to_budget(co2_g: float):
-    """Add CO₂ usage to the budget tracker."""
+    """Add CO₂ usage to the budget tracker. No-ops if Redis is unreachable."""
     budget = get_budget()
     if budget:
-        budget["used_g"] = round(budget["used_g"] + co2_g, 6)
-        _redis_client.set(BUDGET_KEY, json.dumps(budget))
+        try:
+            budget["used_g"] = round(budget["used_g"] + co2_g, 6)
+            _redis_client.set(BUDGET_KEY, json.dumps(budget))
+        except redis.RedisError as exc:
+            logger.error("add_to_budget failed — Redis unreachable: %s", exc)
 
 
 def reset_budget():
-    """Reset usage to 0 (keep the limit)."""
+    """Reset usage to 0 (keep the limit). No-ops if Redis is unreachable."""
     budget = get_budget()
     if budget:
-        budget["used_g"] = 0.0
-        _redis_client.set(BUDGET_KEY, json.dumps(budget))
+        try:
+            budget["used_g"] = 0.0
+            _redis_client.set(BUDGET_KEY, json.dumps(budget))
+        except redis.RedisError as exc:
+            logger.error("reset_budget failed — Redis unreachable: %s", exc)
 
 
 def get_budget_pressure() -> str:

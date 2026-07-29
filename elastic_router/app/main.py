@@ -331,8 +331,9 @@ import time, math, random
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.config import DEFAULT_WEIGHT_PROFILE, ROUTER_PORT
@@ -399,6 +400,22 @@ app.add_middleware(CORSMiddleware,
                    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
+# ── Global error hardening ───────────────────────────────────────────────────
+# Any exception an endpoint doesn't handle itself lands here instead of
+# bubbling up as a raw 500 traceback string to the UI.
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error("Unhandled error on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "message": "Something went wrong on the router. Please try again.",
+            "detail": str(exc),
+        },
+    )
+
+
 # ── Chat ──────────────────────────────────────────────────────────────────────
 
 @app.post("/chat/completions", response_model=ChatResponse)
@@ -416,7 +433,7 @@ async def chat_completions(request: ChatRequest):
         if cached:
             receipt = cached["carbon_receipt"]
             budget  = get_budget()
-            if budget:
+            if budget and budget.get("limit_g", 0) > 0:
                 receipt["budget_limit_g"]  = budget["limit_g"]
                 receipt["budget_used_g"]   = round(budget["used_g"], 4)
                 receipt["budget_pressure"] = get_budget_pressure()
@@ -486,7 +503,7 @@ async def chat_completions(request: ChatRequest):
 
     # STEP 5 — INJECT BUDGET
     budget = get_budget()
-    if budget:
+    if budget and budget.get("limit_g", 0) > 0:
         receipt["budget_limit_g"]  = budget["limit_g"]
         receipt["budget_used_g"]   = round(budget["used_g"], 4)
         receipt["budget_pressure"] = get_budget_pressure()
